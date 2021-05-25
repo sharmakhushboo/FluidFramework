@@ -9,6 +9,7 @@ import { EventEmitter } from "events";
 import { IValueFactory, IValueOpEmitter, IValueOperation, IValueType } from "@fluidframework/map";
 import * as MergeTree from "@fluidframework/merge-tree";
 import { ISequencedDocumentMessage } from "@fluidframework/protocol-definitions";
+import { v4 as uuid } from "uuid";
 
 export interface ISerializedInterval {
     sequenceNumber: number;
@@ -22,6 +23,7 @@ export interface ISerializableInterval extends MergeTree.IInterval {
     properties: MergeTree.PropertySet;
     serialize(client: MergeTree.Client);
     addProperties(props: MergeTree.PropertySet);
+    getUniqueId(): string | undefined;
 }
 
 export interface IIntervalHelpers<TInterval extends ISerializableInterval> {
@@ -33,12 +35,21 @@ export interface IIntervalHelpers<TInterval extends ISerializableInterval> {
 export class Interval implements ISerializableInterval {
     public properties: MergeTree.PropertySet;
     public auxProps: MergeTree.PropertySet[];
+    private static readonly uniqueIdKey = "uniqueIntervalId";
     constructor(
         public start: number,
         public end: number,
         props?: MergeTree.PropertySet) {
-        if (props) {
-            this.addProperties(props);
+        this.addProperties(props);
+        this.properties[Interval.uniqueIdKey] = uuid();
+    }
+
+    public getUniqueId(): string | undefined {
+        if (this.properties) {
+            const id = this.properties[Interval.uniqueIdKey];
+            if (id !== undefined) {
+                return id.toString() as string;
+            }
         }
     }
 
@@ -115,15 +126,15 @@ export class Interval implements ISerializableInterval {
 export class SequenceInterval implements ISerializableInterval {
     public properties: MergeTree.PropertySet;
     private readonly checkMergeTree: MergeTree.MergeTree;
+    private static readonly uniqueIdKey = "uniqueIntervalId";
 
     constructor(
         public start: MergeTree.LocalReference,
         public end: MergeTree.LocalReference,
         public intervalType: MergeTree.IntervalType,
         props?: MergeTree.PropertySet) {
-        if (props) {
-            this.addProperties(props);
-        }
+        this.addProperties(props);
+        this.properties[SequenceInterval.uniqueIdKey] = uuid();
     }
 
     public serialize(client: MergeTree.Client) {
@@ -169,6 +180,15 @@ export class SequenceInterval implements ISerializableInterval {
             this.checkOverlaps(b, result);
         }
         return result;
+    }
+
+    public getUniqueId(): string | undefined {
+        if (this.properties) {
+            const id = this.properties[SequenceInterval.uniqueIdKey];
+            if (id !== undefined) {
+                return id.toString() as string;
+            }
+        }
     }
 
     public union(b: SequenceInterval) {
@@ -451,6 +471,18 @@ export class LocalIntervalCollection<TInterval extends ISerializableInterval> {
             this.endIntervalTree.put(interval, interval, this.endConflictResolver);
         }
         return interval;
+    }
+
+    public getIntervalById(id: string) {
+        let result: TInterval | undefined;
+        this.intervalTree.map((interval: TInterval) => {
+            if (interval.getUniqueId() === id) {
+                result = interval;
+                return false;
+            }
+            return true;
+        });
+        return result;
     }
 
     public serialize() {
@@ -753,6 +785,21 @@ export class IntervalCollectionView<TInterval extends ISerializableInterval> ext
         return this;
     }
 
+    public getIntervalById(id: string) {
+        return this.localCollection.getIntervalById(id);
+    }
+
+    public removeIntervalById(id: string) {
+        const interval = this.localCollection.getIntervalById(id);
+        if (interval) {
+            const serializedInterval = interval.serialize(this.client);
+            if (serializedInterval) {
+                this.deleteInterval(serializedInterval, true, undefined);
+            }
+        }
+        return interval;
+    }
+
     public serializeInternal() {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return this.localCollection.serialize();
@@ -939,5 +986,17 @@ export class IntervalCollection<TInterval extends ISerializableInterval> {
         }
 
         this.view.gatherIterationResults(results, iteratesForward, start, end);
+    }
+
+    public getIntervalById(id: string) {
+        if (this.view) {
+            return this.view.getIntervalById(id);
+        }
+    }
+
+    public removeIntervalById(id: string) {
+        if (this.view) {
+            return this.view.removeIntervalById(id);
+        }
     }
 }
